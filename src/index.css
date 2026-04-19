@@ -1,0 +1,58 @@
+:root {
+  --color-photon-cyan: #00C8D4;
+  --color-amber: #E8A020;
+  --color-quantum-violet: #7C5CFC;
+  
+  --bg-canvas: #0A0A0F;
+  --bg-surface: #121418;
+  --border-color: #2A2D36;
+  --text-primary: #EEEEEE;
+  --text-secondary: #8892B0;
+
+  --font-display: 'Syne', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --font-body: 'Inter', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-weight: 300; /* Inter Light */
+  overflow: hidden; /* Prevent scrolling on the app container */
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  margin: 0;
+}
+
+input, button, select, textarea {
+  font-family: inherit;
+}
+
+.mono-text {
+  font-family: var(--font-mono);
+}
+
+/* Custom scrollbars for rails */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.1);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.2);
+}
