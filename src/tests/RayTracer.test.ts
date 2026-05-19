@@ -12,7 +12,7 @@ describe("RayTracer Engine", () => {
         x: 0,
         y: 0,
         rotation: 0,
-        props: { wavelength: 405, power: 10, polarizationAngle: 0, coherenceLength: 10 }
+        props: { wavelength: 405, power: 10, polarizationType: "H", polarizationAngle: 0, coherenceLength: 10 }
       }
     ];
 
@@ -42,7 +42,7 @@ describe("RayTracer Engine", () => {
         x: -100,
         y: 0,
         rotation: 0,
-        props: { wavelength: 405, power: 10, polarizationAngle: 0, coherenceLength: 10 }
+        props: { wavelength: 405, power: 10, polarizationType: "H", polarizationAngle: 0, coherenceLength: 10 }
       },
       {
         id: "bs1",
@@ -89,7 +89,7 @@ describe("RayTracer Engine", () => {
         x: 0,
         y: 0,
         rotation: 0,
-        props: { wavelength: 405, power: 10, polarizationAngle: 0, coherenceLength: 10 }
+        props: { wavelength: 405, power: 10, polarizationType: "H", polarizationAngle: 0, coherenceLength: 10 }
       },
       {
         id: "det1",

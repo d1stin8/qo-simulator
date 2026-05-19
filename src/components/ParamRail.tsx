@@ -85,6 +85,36 @@ export const ParamRail = (props: Props) => {
                   onUpdate={(v) => handlePropertyChange("wavelength", v)} />
                 <PropertyInput label="POWER (mW)" value={(comp() as any).props.power}
                   onUpdate={(v) => handlePropertyChange("power", v)} />
+                <label style={{ display: "flex", "flex-direction": "column", gap: "4px", "font-size": "12px" }}>
+                  <span style={{color: "var(--text-secondary)", "font-weight": 500}}>POLARIZATION</span>
+                  <select value={(comp() as any).props.polarizationType || "H"} onChange={(e) => handlePropertyChange("polarizationType", e.currentTarget.value, false)}
+                    style={{ 
+                      padding: "6px 8px", 
+                      background: "#ffffff", 
+                      border: "1px solid var(--border-color)", 
+                      "border-radius": "4px",
+                      "font-family": "var(--font-mono)",
+                      "font-size": "13px"
+                    }}>
+                    <option value="H">Horizontal (H)</option>
+                    <option value="V">Vertical (V)</option>
+                    <option value="D">Diagonal (D)</option>
+                    <option value="A">Anti-Diagonal (A)</option>
+                    <option value="R">Right Circular (R)</option>
+                    <option value="L">Left Circular (L)</option>
+                    <option value="Custom">Custom Angle</option>
+                    <option value="Random">Random / Unpolarized</option>
+                  </select>
+                </label>
+                <Show when={(comp() as any).props.polarizationType === "Custom"}>
+                  <PropertyInput label="ANGLE (rad)" value={(comp() as any).props.polarizationAngle || 0}
+                    onUpdate={(v) => handlePropertyChange("polarizationAngle", v)} />
+                </Show>
+              </Show>
+
+              <Show when={comp().type === "MIRROR" || comp().type === "BEAM_SPLITTER"}>
+                <PropertyInput label="REFLECTIVITY (0 to 1)" value={(comp() as any).props.reflectivity ?? (comp().type === "MIRROR" ? 1.0 : 0.5)}
+                  onUpdate={(v) => handlePropertyChange("reflectivity", v)} />
               </Show>
 
               <Show when={comp().type === "WAVEPLATE"}>
@@ -113,10 +143,9 @@ export const ParamRail = (props: Props) => {
               </Show>
 
               <Show when={comp().type === "SPAD_DETECTOR"}>
-                <PropertyInput label="EFFICIENCY" value={(comp() as any).props.quantumEfficiency || 0}
-                  onUpdate={(v) => handlePropertyChange("quantumEfficiency", v)} />
-                <PropertyInput label="DARK COUNT (Hz)" value={(comp() as any).props.darkCountRate || 0}
-                  onUpdate={(v) => handlePropertyChange("darkCountRate", v)} />
+                <div style={{ "font-size": "11px", color: "var(--text-secondary)", "font-style": "italic" }}>
+                  Detector measures optical power and polarization.
+                </div>
               </Show>
             </div>
 

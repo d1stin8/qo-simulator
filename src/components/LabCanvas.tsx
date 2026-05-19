@@ -1,6 +1,6 @@
 // src/components/LabCanvas.tsx
 import { onMount, onCleanup, createEffect } from "solid-js";
-import { Application, Container, Graphics, Rectangle, Assets, Sprite, Text, TextStyle } from "pixi.js";
+import { Application, Container, Graphics, Rectangle, Assets, Sprite, Text, TextStyle, Texture } from "pixi.js";
 import { useLab, type OpticalComponent, type ComponentType } from "../store/LabStore";
 import pumpLaserSvg from "../assets/components/pump_laser.svg";
 import beamSplitterSvg from "../assets/components/beam_splitter.svg";
@@ -11,6 +11,7 @@ import defaultSvg from "../assets/components/default.svg";
 import { calculateBeams, type BeamSegment } from "../engine/RayTracer";
 import { wavelengthToColor } from "../engine/math";
 import { VqolCompiler } from "../engine/vqol/VqolCompiler";
+import { computeWaveField } from "../engine/WaveEngine";
 
 interface LabCanvasProps {
   onDropComponent: (comp: Omit<OpticalComponent, "id">) => string;
@@ -19,6 +20,7 @@ interface LabCanvasProps {
 
 export const LabCanvas = (props: LabCanvasProps) => {
   let canvasParent!: HTMLDivElement;
+  let interferenceCanvasRef: HTMLCanvasElement | undefined;
   const app = new Application();
   const { state, updateComponentPosition, updateSimulationStats } = useLab();
 
@@ -108,6 +110,39 @@ export const LabCanvas = (props: LabCanvasProps) => {
 
     let activeBeams: BeamSegment[] = [];
 
+    // --- WAVE OVERLAY LAYER ---
+    const WAVE_CELL = 6; // world-px per wave-grid cell
+
+    let waveUpdatePending = false;
+    const scheduleWaveUpdate = () => {
+      if (waveUpdatePending) return;
+      waveUpdatePending = true;
+      setTimeout(() => {
+        waveUpdatePending = false;
+        if (!state.showInterferenceView) return;
+        const field = computeWaveField(
+          activeBeams,
+          -TABLE_W / 2, -TABLE_H / 2,
+          TABLE_W, TABLE_H,
+          WAVE_CELL
+        );
+        const imgData = new ImageData(
+          new Uint8ClampedArray(field.pixels.buffer as ArrayBuffer),
+          field.width,
+          field.height
+        );
+        
+        if (interferenceCanvasRef) {
+          if (interferenceCanvasRef.width !== field.width || interferenceCanvasRef.height !== field.height) {
+            interferenceCanvasRef.width = field.width;
+            interferenceCanvasRef.height = field.height;
+          }
+          const ctx = interferenceCanvasRef.getContext('2d');
+          if (ctx) ctx.putImageData(imgData, 0, 0);
+        }
+      }, 60);
+    };
+
     const statLayer = new Container();
     world.addChild(statLayer);
     
@@ -135,7 +170,9 @@ export const LabCanvas = (props: LabCanvasProps) => {
         // Core Game Loop: Math Update Step
         const rayResult = calculateBeams(state.sessions[state.activeSessionId]?.components as OpticalComponent[] || []);
         activeBeams = rayResult.segments;
-        // The rayResult.vqolGraph is passed to the WebGPU compiler.
+
+        // Wave overlay updates
+        if (state.showInterferenceView) scheduleWaveUpdate();
 
         // Core Game Loop: Render Phase
         beamLayer.clear();
@@ -183,7 +220,7 @@ export const LabCanvas = (props: LabCanvasProps) => {
         const activeComponents = state.sessions[state.activeSessionId]?.components || [];
         for (const comp of activeComponents) {
            const val = state.simulationStats?.[comp.id];
-           if (val !== undefined && (comp.type === "SPAD_DETECTOR" || comp.type === "COINCIDENCE_UNIT")) {
+           if (comp.type === "SPAD_DETECTOR" || comp.type === "COINCIDENCE_UNIT") {
                let label = statLabels.get(comp.id);
                if (!label) {
                    label = new Text({ text: '', style: statStyle });
@@ -193,7 +230,18 @@ export const LabCanvas = (props: LabCanvasProps) => {
                }
                label.x = comp.x;
                label.y = comp.y - 25; // Floating above the component
-               label.text = `${val.toLocaleString(undefined, {maximumFractionDigits: 0})} Hz`;
+               
+               let power = 0;
+               if (val !== undefined) {
+                   power = Math.max(0, val.s0 - 0.5); // subtract vacuum noise floor from S0
+               }
+               
+               if (power < 0.01) {
+                   label.text = "0.00 mW";
+               } else {
+                   label.text = `${power.toFixed(2)} mW`;
+               }
+               
                label.visible = true;
            } else {
                const label = statLabels.get(comp.id);
@@ -225,15 +273,8 @@ export const LabCanvas = (props: LabCanvasProps) => {
         
         const runtimeStats = await VqolCompiler.compileAndRun(gpuDevice, vqolGraph, SAMPLES_PER_TICK);
         
-        // Convert raw clicks into Clicks Per Second equivalent
-        // 1 sample = 1 microsecond (per paper), so Clicks * (1,000,000 / SAMPLES_PER_TICK) = CPS
-        const cpsMultiplier = 1000000 / SAMPLES_PER_TICK;
-        const normalizedStats: Record<string, number> = {};
-        for (const [id, clicks] of Object.entries(runtimeStats)) {
-           normalizedStats[id] = clicks * cpsMultiplier;
-        }
-        
-        updateSimulationStats(normalizedStats);
+        // runtimeStats values are already normalised mean power from the compiler
+        updateSimulationStats(runtimeStats);
       } catch (e) {
         console.error("VQOL Processing Error:", e);
       }
@@ -320,6 +361,7 @@ export const LabCanvas = (props: LabCanvasProps) => {
     }, { passive: false });
 
     // --- 4. HTML DROP HANDLING ---
+    // Layer order: table → statLayer → beamLayer → componentLayer
     const beamLayer = new Graphics();
     world.addChild(beamLayer);
     
@@ -342,9 +384,11 @@ export const LabCanvas = (props: LabCanvasProps) => {
       dropWorldY = Math.max(-TABLE_H / 2, Math.min(TABLE_H / 2, dropWorldY));
 
       let defaultProps: any = {};
-      if (type === "PUMP_LASER") defaultProps = { wavelength: 405, power: 10, polarizationAngle: 0, coherenceLength: 10 };
+      if (type === "PUMP_LASER") defaultProps = { wavelength: 405, power: 10, polarizationType: "H", polarizationAngle: 0, coherenceLength: 10 };
       if (type === "WAVEPLATE") defaultProps = { type: "HWP", fastAxisAngle: 0, retardance: Math.PI };
-      if (type === "SPAD_DETECTOR") defaultProps = { quantumEfficiency: 0.6, darkCountRate: 100, deadTime: 20 };
+      if (type === "SPAD_DETECTOR") defaultProps = {};
+      if (type === "BEAM_SPLITTER") defaultProps = { reflectivity: 0.5, phaseShiftReflect: Math.PI };
+      if (type === "MIRROR") defaultProps = { reflectivity: 1.0 };
 
       const snappedX = Math.round(dropWorldX / MAJOR_STEP) * MAJOR_STEP;
       const snappedY = Math.round(dropWorldY / MAJOR_STEP) * MAJOR_STEP;
@@ -408,5 +452,41 @@ export const LabCanvas = (props: LabCanvasProps) => {
   });
 
   onCleanup(() => app.destroy(true));
-  return <div ref={canvasParent} style={{ width: "100%", height: "100%", overflow: "hidden" }} />;
+  
+  return (
+    <>
+      <div ref={canvasParent} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
+      {state.showInterferenceView && (
+        <div style={{
+          position: "absolute",
+          bottom: "16px",
+          left: "16px",
+          background: "rgba(10, 10, 12, 0.8)",
+          "backdrop-filter": "blur(8px)",
+          "border-radius": "8px",
+          border: "1px solid rgba(99, 102, 241, 0.3)",
+          padding: "12px",
+          "box-shadow": "0 4px 16px rgba(0,0,0,0.6)",
+          "z-index": 10,
+          display: "flex",
+          "flex-direction": "column",
+          "pointer-events": "auto"
+        }}>
+          <div style={{ "margin-bottom": "8px", "border-bottom": "1px solid rgba(99, 102, 241, 0.3)", "padding-bottom": "4px", "font-weight": "bold", color: "#e0e7ff", "font-family": "var(--font-mono)", "font-size": "12px" }}>
+            Interference Pattern
+          </div>
+          <canvas 
+            ref={interferenceCanvasRef} 
+            style={{ 
+              width: "250px", 
+              height: "250px", 
+              "border-radius": "4px",
+              background: "#000",
+              border: "1px solid rgba(255,255,255,0.05)"
+            }} 
+          />
+        </div>
+      )}
+    </>
+  );
 };

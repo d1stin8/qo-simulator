@@ -130,9 +130,9 @@ export function calculateBeams(components: OpticalComponent[]): { segments: Beam
       // Default normal is along X so face is vertical (+ PI/2)
       let faceAngle = cAngle + Math.PI / 2;
       
-      // Splitting/Reflecting optics are natively drawn with a -45 deg diagonal face at 0 rotation 
+      // Splitting optics are natively drawn with a -45 deg diagonal face at 0 rotation 
       // so horizontal light (0 deg) hits it and perfectly reflects UP (-90 deg in graphics space)
-      if (cType === "BEAM_SPLITTER" || cType === "MIRROR" || cType === "PBS") {
+      if (cType === "BEAM_SPLITTER") {
           faceAngle = cAngle - Math.PI / 4;
       }
 

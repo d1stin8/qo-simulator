@@ -3,13 +3,9 @@ import { LabCanvas } from "./components/LabCanvas";
 import { useLab, type ComponentType } from "./store/LabStore";
 import { Toolbar } from "./components/Toolbar";
 import { ParamRail } from "./components/ParamRail";
-import { runVqolTest } from "./engine/vqol/VqolComputeSandbox";
-
-// Expose the WebGPU VQOL validation suite to the browser console globally
-(window as any).runVqolTest = runVqolTest;
 
 function App() {
-  const { addComponent, state, loadState, setSimulationState, addSession, switchSession, renameSession } = useLab();
+  const { addComponent, state, loadState, setSimulationState, setInterferenceView, addSession, switchSession, renameSession } = useLab();
   const [editingComponentId, setEditingComponentId] = createSignal<string | null>(null);
   const [experimentName, setExperimentName] = createSignal("");
 
@@ -185,6 +181,31 @@ function App() {
           onClick={() => setSimulationState(!state.isRunning)}>
             {state.isRunning ? "Stop" : "Play"}
           </button>
+
+          {/* Wave Interference View Toggle */}
+          <button
+            title={state.showInterferenceView ? "Hide interference overlay" : "Show wave interference overlay"}
+            style={{
+              background: state.showInterferenceView
+                ? "linear-gradient(135deg, #0ea5e9, #6366f1)"
+                : "rgba(255,255,255,0.05)",
+              color: state.showInterferenceView ? "#fff" : "var(--text-secondary)",
+              border: state.showInterferenceView
+                ? "1px solid rgba(99,102,241,0.6)"
+                : "1px solid rgba(255,255,255,0.1)",
+              "border-radius": "4px",
+              padding: "6px 14px",
+              "font-family": "var(--font-body)",
+              "font-weight": 600,
+              "font-size": "13px",
+              cursor: "pointer",
+              transition: "all 0.2s",
+              "box-shadow": state.showInterferenceView ? "0 0 12px rgba(99,102,241,0.5)" : "none"
+            }}
+            onClick={() => setInterferenceView(!state.showInterferenceView)}
+          >
+            🌊 Wave View
+          </button>
           
           <div style={{ width: "1px", height: "16px", background: "rgba(255,255,255,0.1)", margin: "0 4px" }} />
 
@@ -236,29 +257,8 @@ function App() {
           onClick={handleExport}>
             Export
           </button>
-          <button style={{
-            background: "var(--color-quantum-violet)",
-            color: "#ffffff",
-            border: "none",
-            "border-radius": "4px",
-            padding: "6px 16px",
-            "font-family": "var(--font-body)",
-            "font-weight": 500,
-            "font-size": "13px",
-            cursor: "pointer",
-            transition: "opacity 0.1s",
-            "margin-left": "4px"
-          }} onMouseEnter={(e) => e.currentTarget.style.opacity = "0.9"} onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
-          onClick={() => {
-            runVqolTest().then((res) => {
-               if (res) alert("WebGPU Test complete! Check your developer console for the results.");
-            }).catch(e => {
-               alert("Error running WebGPU test. Open console for details.");
-               console.error(e);
-            });
-          }}>
-            Test Engine
-          </button>
+          
+          <div style={{ width: "1px", height: "16px", background: "rgba(255,255,255,0.1)", margin: "0 4px" }} />
         </div>
       </header>
 
@@ -314,22 +314,65 @@ function App() {
         "pointer-events": "none",
         "min-width": "160px"
       }}>
-        <div style={{ "margin-bottom": "8px", "border-bottom": "1px solid rgba(34, 211, 238, 0.2)", "padding-bottom": "4px", "font-weight": "bold" }}>VQOL Analysis</div>
+        <div style={{ "margin-bottom": "8px", "border-bottom": "1px solid rgba(34, 211, 238, 0.2)", "padding-bottom": "4px", "font-weight": "bold" }}>Field Analysis</div>
         {(() => {
            const activeComps = state.sessions[state.activeSessionId]?.components || [];
            const detectors = activeComps.filter(c => c.type === "SPAD_DETECTOR");
            if (detectors.length === 0) return <div style={{ color: "var(--text-secondary)" }}>0 detectors</div>;
            
-           return detectors.map((d, i) => (
-               <div style={{ display: "flex", "justify-content": "space-between", margin: "4px 0" }}>
-                   <span style={{ color: "var(--text-secondary)" }}>D{i + 1} ({d.id.slice(-4)})</span>
-                   <span>
-                        {state.simulationStats?.[d.id] 
-                            ? (state.simulationStats[d.id] > 99999 ? "∞ (Clamped)" : `${state.simulationStats[d.id].toLocaleString(undefined, {maximumFractionDigits: 0})} Hz`) 
-                            : "0 Hz"}
-                   </span>
-               </div>
-           ));
+           return detectors.map((d, i) => {
+               const stats = state.simulationStats?.[d.id];
+               let powerText = "0.000";
+               let polText = "—";
+
+               if (stats) {
+                   // total is mean intensity (alpha^2 + vacuum noise)
+                   // Laser power prop = stats.s0 - 0.5 (subtract vacuum noise floor)
+                   const signal = Math.max(0, stats.s0 - 0.5);
+                   powerText = signal < 0.01 ? "0.000" : signal.toFixed(3);
+                   
+                   if (signal >= 0.01) {
+                       const s0 = signal;
+                       const s1 = stats.s1;
+                       const s2 = stats.s2;
+                       const s3 = stats.s3;
+                       
+                       const dop = Math.sqrt(s1*s1 + s2*s2 + s3*s3) / s0;
+                       
+                       if (dop < 0.1) {
+                           polText = "Unpolarized";
+                       } else if (Math.abs(s3) / s0 > 0.9) {
+                           polText = s3 > 0 ? "Right-Circular (R)" : "Left-Circular (L)";
+                       } else {
+                           // Linear polarization angle
+                           let angleRad = 0.5 * Math.atan2(s2, s1);
+                           let angleDeg = angleRad * (180 / Math.PI);
+                           if (angleDeg < 0) angleDeg += 180;
+                           
+                           // Snap to common angles for clean display
+                           if (Math.abs(angleDeg - 0) < 1 || Math.abs(angleDeg - 180) < 1) polText = "Horizontal (0°)";
+                           else if (Math.abs(angleDeg - 90) < 1) polText = "Vertical (90°)";
+                           else if (Math.abs(angleDeg - 45) < 1) polText = "Diagonal (45°)";
+                           else if (Math.abs(angleDeg - 135) < 1) polText = "Anti-diagonal (-45°)";
+                           else polText = `Linear (${angleDeg.toFixed(1)}°)`;
+                       }
+                   }
+               }
+
+               return (
+                   <div style={{ display: "flex", "flex-direction": "column", "margin-bottom": "8px", "border-bottom": "1px solid rgba(255,255,255,0.05)", "padding-bottom": "4px" }}>
+                       <div style={{ color: "var(--text-secondary)", "margin-bottom": "2px" }}>D{i + 1} ({d.id.slice(-4)})</div>
+                       <div style={{ display: "flex", "justify-content": "space-between", gap: "12px" }}>
+                           <span style={{ color: "#a0a0a0" }}>Power:</span>
+                           <span>{powerText} <span style={{ color: "var(--text-secondary)", "font-size": "10px" }}>mW</span></span>
+                       </div>
+                       <div style={{ display: "flex", "justify-content": "space-between", gap: "12px" }}>
+                           <span style={{ color: "#a0a0a0" }}>Polarization:</span>
+                           <span>{polText}</span>
+                       </div>
+                   </div>
+               );
+           });
         })()}
       </div>
 

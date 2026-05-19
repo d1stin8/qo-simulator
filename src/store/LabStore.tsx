@@ -17,6 +17,7 @@ export type ComponentType =
 export interface PumpLaserProps {
   wavelength: number; // e.g. 405 nm
   power: number; // mW
+  polarizationType: "H" | "V" | "D" | "A" | "R" | "L" | "Custom" | "Random";
   polarizationAngle: number; // radians (relative to horizontal)
   coherenceLength: number; // mm
 }
@@ -46,13 +47,11 @@ export interface PhaseShifterProps {
 }
 
 export interface SPADDetectorProps {
-  quantumEfficiency: number;// 0.0 to 1.0 (e.g., 0.6 for 60%)
-  darkCountRate: number;    // Hz
-  deadTime: number;         // nanoseconds
+  label?: string; // optional user label
 }
 
 export interface CoincidenceUnitProps {
-  timeWindow: number;       // nanoseconds (resolving time for coincidences)
+  timeWindow: number; // nanoseconds (resolving time for coincidences)
 }
 
 // Base component interface
@@ -86,7 +85,8 @@ interface LabState {
   sessions: Record<string, ExperimentSession>;
   activeSessionId: string;
   isRunning: boolean;
-  simulationStats: Record<string, number>;
+  showInterferenceView: boolean;
+  simulationStats: Record<string, any>;
 }
 
 // Store Actions
@@ -99,10 +99,11 @@ interface LabContextValue {
   removeComponent: (id: string) => void;
   loadState: (components: OpticalComponent[]) => void;
   setSimulationState: (isRunning: boolean) => void;
+  setInterferenceView: (show: boolean) => void;
   addSession: (name?: string) => void;
   switchSession: (id: string) => void;
   renameSession: (id: string, name: string) => void;
-  updateSimulationStats: (stats: Record<string, number>) => void;
+  updateSimulationStats: (stats: Record<string, any>) => void;
 }
 
 // context
@@ -119,12 +120,13 @@ export function LabProvider(props: { children: JSX.Element }) {
   if (savedStateStr) {
     try {
       const parsed = JSON.parse(savedStateStr);
-      initialState = { ...parsed, isRunning: false, simulationStats: {} }; // always start paused
+      initialState = { ...parsed, isRunning: false, showInterferenceView: false, simulationStats: {} };
     } catch {
       initialState = {
         sessions: { [defaultSessionId]: { id: defaultSessionId, name: "Unnamed (1)", components: [] } },
         activeSessionId: defaultSessionId,
         isRunning: false,
+        showInterferenceView: false,
         simulationStats: {}
       };
     }
@@ -133,6 +135,7 @@ export function LabProvider(props: { children: JSX.Element }) {
       sessions: { [defaultSessionId]: { id: defaultSessionId, name: "Unnamed (1)", components: [] } },
       activeSessionId: defaultSessionId,
       isRunning: false,
+      showInterferenceView: false,
       simulationStats: {}
     };
   }
@@ -175,6 +178,9 @@ export function LabProvider(props: { children: JSX.Element }) {
     },
     setSimulationState: (isRunning) => {
       setState("isRunning", isRunning);
+    },
+    setInterferenceView: (show) => {
+      setState("showInterferenceView", show);
     },
     addSession: (name) => {
       const id = `mod-${Date.now()}`;
