@@ -1,5 +1,5 @@
 // src/components/LabCanvas.tsx
-import { onMount, onCleanup, createEffect } from "solid-js";
+import { onMount, onCleanup, createEffect, createSignal } from "solid-js";
 import { Application, Container, Graphics, Rectangle, Assets, Sprite, Text, TextStyle, Texture } from "pixi.js";
 import { useLab, type OpticalComponent, type ComponentType } from "../store/LabStore";
 import pumpLaserSvg from "../assets/components/pump_laser.svg";
@@ -7,11 +7,12 @@ import beamSplitterSvg from "../assets/components/beam_splitter.svg";
 import waveplateSvg from "../assets/components/waveplate.svg";
 import mirrorSvg from "../assets/components/mirror.svg";
 import detectorSvg from "../assets/components/detector.svg";
+import screenSvg from "../assets/components/screen.svg";
 import defaultSvg from "../assets/components/default.svg";
 import { calculateBeams, type BeamSegment } from "../engine/RayTracer";
 import { wavelengthToColor } from "../engine/math";
-import { VqolCompiler } from "../engine/vqol/VqolCompiler";
-import { computeWaveField } from "../engine/WaveEngine";
+import { OpticalSolver } from "../engine/solver/OpticalSolver";
+import { computeScreenField } from "../engine/WaveEngine";
 
 interface LabCanvasProps {
   onDropComponent: (comp: Omit<OpticalComponent, "id">) => string;
@@ -20,9 +21,12 @@ interface LabCanvasProps {
 
 export const LabCanvas = (props: LabCanvasProps) => {
   let canvasParent!: HTMLDivElement;
-  let interferenceCanvasRef: HTMLCanvasElement | undefined;
   const app = new Application();
   const { state, updateComponentPosition, updateSimulationStats } = useLab();
+
+  // Per-screen fringe data, updated every tick, consumed by the HUD in the JSX return
+  type FringeEntry = { intensities: Float32Array; wavelength: number; label: string };
+  const [screenFringeData, setScreenFringeData] = createSignal<Record<string, FringeEntry>>({});
 
   // Scale: 40px = 25mm (Standard hole spacing)
   const MAJOR_STEP = 40;
@@ -56,6 +60,7 @@ export const LabCanvas = (props: LabCanvasProps) => {
       waveplateSvg,
       mirrorSvg,
       detectorSvg,
+      screenSvg,
       defaultSvg
     ]);
     
@@ -110,39 +115,6 @@ export const LabCanvas = (props: LabCanvasProps) => {
 
     let activeBeams: BeamSegment[] = [];
 
-    // --- WAVE OVERLAY LAYER ---
-    const WAVE_CELL = 6; // world-px per wave-grid cell
-
-    let waveUpdatePending = false;
-    const scheduleWaveUpdate = () => {
-      if (waveUpdatePending) return;
-      waveUpdatePending = true;
-      setTimeout(() => {
-        waveUpdatePending = false;
-        if (!state.showInterferenceView) return;
-        const field = computeWaveField(
-          activeBeams,
-          -TABLE_W / 2, -TABLE_H / 2,
-          TABLE_W, TABLE_H,
-          WAVE_CELL
-        );
-        const imgData = new ImageData(
-          new Uint8ClampedArray(field.pixels.buffer as ArrayBuffer),
-          field.width,
-          field.height
-        );
-        
-        if (interferenceCanvasRef) {
-          if (interferenceCanvasRef.width !== field.width || interferenceCanvasRef.height !== field.height) {
-            interferenceCanvasRef.width = field.width;
-            interferenceCanvasRef.height = field.height;
-          }
-          const ctx = interferenceCanvasRef.getContext('2d');
-          if (ctx) ctx.putImageData(imgData, 0, 0);
-        }
-      }, 60);
-    };
-
     const statLayer = new Container();
     world.addChild(statLayer);
     
@@ -171,8 +143,22 @@ export const LabCanvas = (props: LabCanvasProps) => {
         const rayResult = calculateBeams(state.sessions[state.activeSessionId]?.components as OpticalComponent[] || []);
         activeBeams = rayResult.segments;
 
-        // Wave overlay updates
-        if (state.showInterferenceView) scheduleWaveUpdate();
+        const { detectorStats, beamPowers } = OpticalSolver.solve(rayResult.opticalGraph);
+        updateSimulationStats(detectorStats);
+
+        // Compute fringe patterns for each screen and push to HUD signal
+        const allComponents = state.sessions[state.activeSessionId]?.components || [];
+        const screenComponents = allComponents.filter(c => c.type === "SCREEN");
+        const newFringeData: Record<string, FringeEntry> = {};
+        for (const sc of screenComponents) {
+          const screenWidth = (sc as any).props?.width ?? 120;
+          const angleRad = (sc.rotation * Math.PI) / 180;
+          const { intensities, wavelength } = computeScreenField(
+            activeBeams, sc.x, sc.y, angleRad, screenWidth
+          );
+          newFringeData[sc.id] = { intensities, wavelength, label: `SCR ${sc.id.slice(-4)}` };
+        }
+        setScreenFringeData(newFringeData);
 
         // Core Game Loop: Render Phase
         beamLayer.clear();
@@ -182,6 +168,9 @@ export const LabCanvas = (props: LabCanvasProps) => {
         const gap = 35;
 
         for (const beam of activeBeams) {
+          // Skip beams carrying negligible power (e.g. the missing PBS arm)
+          const solvedPower = beamPowers[beam.beamId];
+          if (solvedPower !== undefined && solvedPower < 0.001) continue;
           const dx = beam.endX - beam.startX;
           const dy = beam.endY - beam.startY;
           const dist = Math.sqrt(dx*dx + dy*dy);
@@ -232,9 +221,7 @@ export const LabCanvas = (props: LabCanvasProps) => {
                label.y = comp.y - 25; // Floating above the component
                
                let power = 0;
-               if (val !== undefined) {
-                   power = Math.max(0, val.s0 - 0.5); // subtract vacuum noise floor from S0
-               }
+               if (val !== undefined) power = Math.max(0, val.power ?? 0);
                
                if (power < 0.01) {
                    label.text = "0.00 mW";
@@ -256,34 +243,6 @@ export const LabCanvas = (props: LabCanvasProps) => {
       }
     });
 
-    // --- 1.5 ASYNC GPU SIMULATION LOOP ---
-    let gpuProcessing = false;
-    const SAMPLES_PER_TICK = 500000;
-    
-    const runGPU = async () => {
-      if (!gpuDevice || !state.isRunning || gpuProcessing) {
-        setTimeout(runGPU, 100);
-        return;
-      }
-      
-      gpuProcessing = true;
-      try {
-        const components = state.sessions[state.activeSessionId]?.components || [];
-        const { vqolGraph } = calculateBeams(components as OpticalComponent[]);
-        
-        const runtimeStats = await VqolCompiler.compileAndRun(gpuDevice, vqolGraph, SAMPLES_PER_TICK);
-        
-        // runtimeStats values are already normalised mean power from the compiler
-        updateSimulationStats(runtimeStats);
-      } catch (e) {
-        console.error("VQOL Processing Error:", e);
-      }
-      gpuProcessing = false;
-      setTimeout(runGPU, 25);
-    };
-    
-    // Start background GPU daemon
-    runGPU();
 
     // --- 2. HUD (External) ---
     // The HUD is now rendered in the HTML footer via IDs 'coords-hud' and 'fps-counter'.
@@ -389,6 +348,7 @@ export const LabCanvas = (props: LabCanvasProps) => {
       if (type === "SPAD_DETECTOR") defaultProps = {};
       if (type === "BEAM_SPLITTER") defaultProps = { reflectivity: 0.5, phaseShiftReflect: Math.PI };
       if (type === "MIRROR") defaultProps = { reflectivity: 1.0 };
+      if (type === "SCREEN") defaultProps = { width: 120 };
 
       const snappedX = Math.round(dropWorldX / MAJOR_STEP) * MAJOR_STEP;
       const snappedY = Math.round(dropWorldY / MAJOR_STEP) * MAJOR_STEP;
@@ -410,6 +370,7 @@ export const LabCanvas = (props: LabCanvasProps) => {
           if (compData.type === "WAVEPLATE") texUrl = waveplateSvg;
           if (compData.type === "MIRROR") texUrl = mirrorSvg;
           if (compData.type === "SPAD_DETECTOR" || compData.type === "COINCIDENCE_UNIT") texUrl = detectorSvg;
+          if (compData.type === "SCREEN") texUrl = screenSvg;
 
           pixiObj = Sprite.from(texUrl);
           pixiObj.label = 'component'; // CRITICAL: This label stops the table from panning!
@@ -452,39 +413,117 @@ export const LabCanvas = (props: LabCanvasProps) => {
   });
 
   onCleanup(() => app.destroy(true));
-  
+
+  // Draw fringe pattern onto a canvas element reactively
+  const drawFringeCanvas = (canvas: HTMLCanvasElement, intensities: Float32Array, wavelength: number) => {
+    const W = canvas.width;
+    const H = canvas.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#05051a';
+    ctx.fillRect(0, 0, W, H);
+
+    let maxI = 0;
+    for (let i = 0; i < intensities.length; i++) if (intensities[i] > maxI) maxI = intensities[i];
+    if (maxI === 0) return;
+
+    // Wavelength → RGB tint
+    const wl = wavelength;
+    let r = 0, g = 0, b = 0;
+    if      (wl >= 380 && wl <= 440) { r = -(wl-440)/(440-380); b = 1; }
+    else if (wl >  440 && wl <= 490) { g = (wl-440)/(490-440); b = 1; }
+    else if (wl >  490 && wl <= 510) { g = 1; b = -(wl-510)/(510-490); }
+    else if (wl >  510 && wl <= 580) { r = (wl-510)/(580-510); g = 1; }
+    else if (wl >  580 && wl <= 645) { r = 1; g = -(wl-645)/(645-580); }
+    else if (wl >  645 && wl <= 780) { r = 1; }
+    else { r = 0.8; g = 0.3; b = 1; } // UV / default
+
+    const n = intensities.length;
+    const barW = W / n;
+    for (let i = 0; i < n; i++) {
+      const norm = Math.pow(intensities[i] / maxI, 0.5);
+      if (norm < 0.01) continue;
+      const ri = Math.round(r * norm * 255);
+      const gi = Math.round(g * norm * 255);
+      const bi = Math.round(b * norm * 255);
+      // vertical gradient: bright at centre, fades to edge (simulate finite aperture)
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0,   `rgba(${ri},${gi},${bi},0)`);
+      grad.addColorStop(0.2, `rgba(${ri},${gi},${bi},${norm.toFixed(2)})`);
+      grad.addColorStop(0.8, `rgba(${ri},${gi},${bi},${norm.toFixed(2)})`);
+      grad.addColorStop(1,   `rgba(${ri},${gi},${bi},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(i * barW, 0, barW + 0.5, H);
+    }
+  };
+
   return (
     <>
       <div ref={canvasParent} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
-      {state.showInterferenceView && (
+
+      {/* Screen HUD: one panel per SCREEN component */}
+      {Object.keys(screenFringeData()).length > 0 && (
         <div style={{
           position: "absolute",
           bottom: "16px",
           left: "16px",
-          background: "rgba(10, 10, 12, 0.8)",
-          "backdrop-filter": "blur(8px)",
-          "border-radius": "8px",
-          border: "1px solid rgba(99, 102, 241, 0.3)",
-          padding: "12px",
-          "box-shadow": "0 4px 16px rgba(0,0,0,0.6)",
-          "z-index": 10,
           display: "flex",
           "flex-direction": "column",
-          "pointer-events": "auto"
+          gap: "8px",
+          "z-index": 10,
+          "pointer-events": "none",
+          "max-height": "80vh",
+          "overflow-y": "auto"
         }}>
-          <div style={{ "margin-bottom": "8px", "border-bottom": "1px solid rgba(99, 102, 241, 0.3)", "padding-bottom": "4px", "font-weight": "bold", color: "#e0e7ff", "font-family": "var(--font-mono)", "font-size": "12px" }}>
-            Interference Pattern
-          </div>
-          <canvas 
-            ref={interferenceCanvasRef} 
-            style={{ 
-              width: "250px", 
-              height: "250px", 
-              "border-radius": "4px",
-              background: "#000",
-              border: "1px solid rgba(255,255,255,0.05)"
-            }} 
-          />
+          {Object.entries(screenFringeData()).map(([id, entry]) => (
+            <div style={{
+              background: "rgba(5, 5, 26, 0.85)",
+              "backdrop-filter": "blur(10px)",
+              "border-radius": "8px",
+              border: "1px solid rgba(99, 102, 241, 0.35)",
+              padding: "10px 12px",
+              "box-shadow": "0 4px 20px rgba(0,0,0,0.7)",
+              "min-width": "260px"
+            }}>
+              <div style={{
+                "margin-bottom": "6px",
+                "padding-bottom": "4px",
+                "border-bottom": "1px solid rgba(99,102,241,0.25)",
+                "font-family": "var(--font-mono)",
+                "font-size": "11px",
+                "font-weight": "bold",
+                color: "#a5b4fc",
+                display: "flex",
+                "align-items": "center",
+                gap: "6px"
+              }}>
+                <span style={{ display: "inline-block", width: "8px", height: "8px", "border-radius": "50%", background: "#6366f1" }} />
+                {entry.label} — Interference Pattern
+              </div>
+              <canvas
+                width={256}
+                height={80}
+                style={{ width: "100%", height: "80px", "border-radius": "4px", display: "block" }}
+                ref={(el) => {
+                  // Reactively redraw whenever fringe data changes
+                  createEffect(() => {
+                    const d = screenFringeData()[id];
+                    if (d && el) drawFringeCanvas(el, d.intensities, d.wavelength);
+                  });
+                }}
+              />
+              <div style={{
+                "margin-top": "4px",
+                "font-family": "var(--font-mono)",
+                "font-size": "10px",
+                color: "rgba(165,180,252,0.5)",
+                "text-align": "center"
+              }}>
+                λ = {entry.wavelength} nm
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </>

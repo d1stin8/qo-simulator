@@ -103,7 +103,7 @@ export const ParamRail = (props: Props) => {
                     <option value="R">Right Circular (R)</option>
                     <option value="L">Left Circular (L)</option>
                     <option value="Custom">Custom Angle</option>
-                    <option value="Random">Random / Unpolarized</option>
+                    <option value="Unpolarized">Unpolarized (H+V)</option>
                   </select>
                 </label>
                 <Show when={(comp() as any).props.polarizationType === "Custom"}>
@@ -113,11 +113,25 @@ export const ParamRail = (props: Props) => {
               </Show>
 
               <Show when={comp().type === "MIRROR" || comp().type === "BEAM_SPLITTER"}>
+                <Show when={comp().type === "BEAM_SPLITTER"}>
+                  <div style={{ "font-size": "11px", color: "var(--text-secondary)", "font-style": "italic", "margin-bottom": "8px", "line-height": "1.4" }}>
+                    <b>Beam Splitter:</b> Coherently splits the incoming beam. Transmitted beam (straight) takes fraction T = 1-R. Reflected beam (90°) takes fraction R and gains a +90° (i) phase shift.
+                  </div>
+                </Show>
                 <PropertyInput label="REFLECTIVITY (0 to 1)" value={(comp() as any).props.reflectivity ?? (comp().type === "MIRROR" ? 1.0 : 0.5)}
                   onUpdate={(v) => handlePropertyChange("reflectivity", v)} />
               </Show>
+              
+              <Show when={comp().type === "PBS"}>
+                <div style={{ "font-size": "11px", color: "var(--text-secondary)", "font-style": "italic", "margin-bottom": "8px", "line-height": "1.4" }}>
+                  <b>Polarization Beam Splitter (PBS):</b> Splits the beam based on polarization. The Horizontal (H) component is perfectly transmitted. The Vertical (V) component is perfectly reflected (90°).
+                </div>
+              </Show>
 
               <Show when={comp().type === "WAVEPLATE"}>
+                <div style={{ "font-size": "11px", color: "var(--text-secondary)", "font-style": "italic", "margin-bottom": "8px", "line-height": "1.4" }}>
+                  <b>Waveplate:</b> Alters polarization. <b>HWP</b> (Half-Wave) rotates linear polarization by 2θ. <b>QWP</b> (Quarter-Wave) converts between linear and circular polarization when θ is ±45°.
+                </div>
                 <label style={{ display: "flex", "flex-direction": "column", gap: "4px", "font-size": "12px" }}>
                   <span style={{color: "var(--text-secondary)", "font-weight": 500}}>WP TYPE</span>
                   <select value={(comp() as any).props.type} onChange={(e) => handlePropertyChange("type", e.currentTarget.value, false)}
@@ -146,6 +160,14 @@ export const ParamRail = (props: Props) => {
                 <div style={{ "font-size": "11px", color: "var(--text-secondary)", "font-style": "italic" }}>
                   Detector measures optical power and polarization.
                 </div>
+              </Show>
+              
+              <Show when={comp().type === "SCREEN"}>
+                <div style={{ "font-size": "11px", color: "var(--text-secondary)", "font-style": "italic", "margin-bottom": "8px", "line-height": "1.4" }}>
+                  <b>Interference Screen:</b> Place in the path of two or more coherent beams. The interference fringe pattern is computed and drawn directly on the screen component. Rotate the screen to change its orientation relative to the beams.
+                </div>
+                <PropertyInput label="SCREEN WIDTH (px)" value={(comp() as any).props.width ?? 120}
+                  onUpdate={(v) => handlePropertyChange("width", v)} />
               </Show>
             </div>
 

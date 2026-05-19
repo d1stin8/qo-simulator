@@ -12,6 +12,7 @@ export function Toolbar(props: ToolbarProps) {
     { type: "WAVEPLATE", name: "Waveplate", color: "#3388ff", short: "WP" },
     { type: "MIRROR", name: "Mirror", color: "#cceeee", short: "MIR" },
     { type: "SPAD_DETECTOR", name: "Detector", color: "#ff8811", short: "DET" },
+    { type: "SCREEN", name: "Screen", color: "#a5b4fc", short: "SCR" },
     { type: "SPDC_CRYSTAL", name: "SPDC Crystal", color: "var(--color-quantum-violet)", short: "NLO" },
   ];
 

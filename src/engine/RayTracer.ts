@@ -13,7 +13,7 @@ export interface BeamSegment {
   beamId: string;
 }
 
-export interface VqolNode {
+export interface OpticalNode {
   componentId: string;
   type: string;
   inputs: string[];
@@ -31,10 +31,10 @@ interface ActiveRay {
   beamId: string;
 }
 
-export function calculateBeams(components: OpticalComponent[]): { segments: BeamSegment[], vqolGraph: VqolNode[] } {
+export function calculateBeams(components: OpticalComponent[]): { segments: BeamSegment[], opticalGraph: OpticalNode[] } {
   const segments: BeamSegment[] = [];
   const activeRays: ActiveRay[] = [];
-  const vqolNodesMap = new Map<string, VqolNode>();
+  const opticalNodesMap = new Map<string, OpticalNode>();
   
   let beamCounter = 0;
   const generateBeamId = () => `b${beamCounter++}`;
@@ -44,7 +44,7 @@ export function calculateBeams(components: OpticalComponent[]): { segments: Beam
     if (comp.type === "PUMP_LASER") {
       const initialBeamId = generateBeamId();
       
-      vqolNodesMap.set(comp.id, {
+      opticalNodesMap.set(comp.id, {
         componentId: comp.id,
         type: comp.type,
         inputs: [],
@@ -132,12 +132,12 @@ export function calculateBeams(components: OpticalComponent[]): { segments: Beam
       
       // Splitting optics are natively drawn with a -45 deg diagonal face at 0 rotation 
       // so horizontal light (0 deg) hits it and perfectly reflects UP (-90 deg in graphics space)
-      if (cType === "BEAM_SPLITTER") {
+      if (cType === "BEAM_SPLITTER" || cType === "PBS") {
           faceAngle = cAngle - Math.PI / 4;
       }
 
       // Extract node to map topology
-      let vNode = vqolNodesMap.get(closestComponent.id);
+      let vNode = opticalNodesMap.get(closestComponent.id);
       if (!vNode) {
         vNode = {
           componentId: closestComponent.id,
@@ -146,19 +146,18 @@ export function calculateBeams(components: OpticalComponent[]): { segments: Beam
           outputs: [],
           params: closestComponent.props || { angle: closestComponent.rotation }
         };
-        vqolNodesMap.set(closestComponent.id, vNode);
+        opticalNodesMap.set(closestComponent.id, vNode);
       }
       vNode.inputs.push(ray.beamId);
 
-      if (cType === "SPAD_DETECTOR" || cType === "COINCIDENCE_UNIT") {
+      if (cType === "SPAD_DETECTOR" || cType === "COINCIDENCE_UNIT" || cType === "SCREEN") {
         // Absorbed completely, ray terminates.
         vNode.params.rotation = closestComponent.rotation;
-      } else if (cType === "MIRROR" || cType === "PBS") {
+      } else if (cType === "MIRROR") {
         const outBeam = generateBeamId();
         vNode.outputs.push(outBeam);
         vNode.params.rotation = closestComponent.rotation;
         
-        // Simple reflection (assuming PBS reflects all for this simple visualizer)
         const refAngle = getReflectedAngle(ray.angle, faceAngle);
         activeRays.push({
           x: closestIntersectionPoint.x,
@@ -168,6 +167,34 @@ export function calculateBeams(components: OpticalComponent[]): { segments: Beam
           abcd: newABCD,
           wavelength: ray.wavelength,
           beamId: outBeam
+        });
+      } else if (cType === "PBS") {
+        // PBS generates two beams: transmitted (H passes) and reflected (V reflects)
+        const transBeam = generateBeamId();
+        const refBeam = generateBeamId();
+        vNode.outputs.push(transBeam, refBeam);
+        vNode.params.rotation = closestComponent.rotation;
+
+        const refAngle = getReflectedAngle(ray.angle, faceAngle);
+        // Transmitted beam (straight through)
+        activeRays.push({
+          x: closestIntersectionPoint.x,
+          y: closestIntersectionPoint.y,
+          angle: ray.angle,
+          power: ray.power * 0.5,
+          abcd: newABCD,
+          wavelength: ray.wavelength,
+          beamId: transBeam
+        });
+        // Reflected beam (90° turn)
+        activeRays.push({
+          x: closestIntersectionPoint.x,
+          y: closestIntersectionPoint.y,
+          angle: refAngle,
+          power: ray.power * 0.5,
+          abcd: newABCD,
+          wavelength: ray.wavelength,
+          beamId: refBeam
         });
       } else if (cType === "BEAM_SPLITTER") {
         const transBeam = generateBeamId();
@@ -231,5 +258,5 @@ export function calculateBeams(components: OpticalComponent[]): { segments: Beam
     }
   }
 
-  return { segments, vqolGraph: Array.from(vqolNodesMap.values()) };
+  return { segments, opticalGraph: Array.from(opticalNodesMap.values()) };
 }

@@ -326,22 +326,19 @@ function App() {
                let polText = "—";
 
                if (stats) {
-                   // total is mean intensity (alpha^2 + vacuum noise)
-                   // Laser power prop = stats.s0 - 0.5 (subtract vacuum noise floor)
-                   const signal = Math.max(0, stats.s0 - 0.5);
+                   const signal = Math.max(0, stats.power);
                    powerText = signal < 0.01 ? "0.000" : signal.toFixed(3);
                    
                    if (signal >= 0.01) {
-                       const s0 = signal;
                        const s1 = stats.s1;
                        const s2 = stats.s2;
                        const s3 = stats.s3;
                        
-                       const dop = Math.sqrt(s1*s1 + s2*s2 + s3*s3) / s0;
+                       const dop = Math.sqrt(s1*s1 + s2*s2 + s3*s3);
                        
                        if (dop < 0.1) {
                            polText = "Unpolarized";
-                       } else if (Math.abs(s3) / s0 > 0.9) {
+                       } else if (Math.abs(s3) > 0.9) {
                            polText = s3 > 0 ? "Right-Circular (R)" : "Left-Circular (L)";
                        } else {
                            // Linear polarization angle

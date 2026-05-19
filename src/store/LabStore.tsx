@@ -11,7 +11,8 @@ export type ComponentType =
   'PHASE_SHIFTER' |
   'MIRROR' |
   'SPAD_DETECTOR' |
-  'COINCIDENCE_UNIT';
+  'COINCIDENCE_UNIT' |
+  'SCREEN';
 
 // Physics properites interfaces
 export interface PumpLaserProps {
@@ -54,17 +55,22 @@ export interface CoincidenceUnitProps {
   timeWindow: number; // nanoseconds (resolving time for coincidences)
 }
 
+export interface ScreenProps {
+  width: number; // physical screen width in world-px (default 120)
+}
+
 // Base component interface
 export type ComponentProperties =
   | { type: "PUMP_LASER"; props: PumpLaserProps }
   | { type: "SPDC_CRYSTAL"; props: SPDCCrystalProps }
   | { type: "BEAM_SPLITTER"; props: BeamSplitterProps }
-  | { type: "PBS"; props: {} } // Ideal PBS assumes 100% T for H, 100% R for V
+  | { type: "PBS"; props: {} }
   | { type: "WAVEPLATE"; props: WaveplateProps }
   | { type: "PHASE_SHIFTER"; props: PhaseShifterProps }
   | { type: "MIRROR"; props: { reflectivity: number } }
   | { type: "SPAD_DETECTOR"; props: SPADDetectorProps }
-  | { type: "COINCIDENCE_UNIT"; props: CoincidenceUnitProps };
+  | { type: "COINCIDENCE_UNIT"; props: CoincidenceUnitProps }
+  | { type: "SCREEN"; props: ScreenProps };
 
 export type OpticalComponent = {
   id: string;

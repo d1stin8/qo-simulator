@@ -149,3 +149,84 @@ export function computeWaveField(
 
   return { pixels, width: gridW, height: gridH, worldX, worldY, cellSize };
 }
+
+/**
+ * Compute a 1D interference fringe intensity array along a screen.
+ * The screen is perpendicular to (screenAngleRad) — i.e. it faces the beam.
+ *
+ * @param segments     Active beam segments from the ray tracer
+ * @param cx           Screen center X (world px)
+ * @param cy           Screen center Y (world px)
+ * @param screenAngle  Rotation of the screen component (radians). The screen 
+ *                     surface is perpendicular to this angle.
+ * @param screenWidth  Width of the screen (world px)
+ * @param resolution   Number of sample pixels across the screen width
+ */
+export function computeScreenField(
+  segments: BeamSegment[],
+  cx: number,
+  cy: number,
+  screenAngle: number,
+  screenWidth: number,
+  resolution = 256
+): { intensities: Float32Array; wavelength: number } {
+  // The screen surface runs perpendicular to screenAngle.
+  // A point at position t along the screen (t in [-w/2, w/2]) is at world coords:
+  //   px = cx + t * cos(screenAngle + PI/2)
+  //   py = cy + t * sin(screenAngle + PI/2)
+  const surfAngle = screenAngle + Math.PI / 2;
+  const cosSurf = Math.cos(surfAngle);
+  const sinSurf = Math.sin(surfAngle);
+
+  const E_re = new Float32Array(resolution);
+  const E_im = new Float32Array(resolution);
+
+  const BEAM_SIGMA = 24; // beam width sigma (world px)
+  const TWO_SIGMA_SQ = 2 * BEAM_SIGMA * BEAM_SIGMA;
+
+  for (const seg of segments) {
+    const dx = seg.endX - seg.startX;
+    const dy = seg.endY - seg.startY;
+    const segLen = Math.sqrt(dx * dx + dy * dy);
+    if (segLen < 1) continue;
+
+    const cosA = dx / segLen;
+    const sinA = dy / segLen;
+    const amplitude = Math.sqrt(Math.max(0, seg.power));
+    const lambdaEff = 50 * (seg.wavelength / 532.0);
+    const kEff = (2 * Math.PI) / lambdaEff;
+    const startPath = seg.abcd[0][1] - segLen;
+
+    for (let i = 0; i < resolution; i++) {
+      // Position along screen surface
+      const t = (i / (resolution - 1) - 0.5) * screenWidth;
+      const wx = cx + t * cosSurf;
+      const wy = cy + t * sinSurf;
+
+      const relX = wx - seg.startX;
+      const relY = wy - seg.startY;
+
+      // Project onto beam direction
+      const along = relX * cosA + relY * sinA;
+      const perp  = -relX * sinA + relY * cosA;
+
+      // Gaussian envelope — beam must actually illuminate this point
+      const w = amplitude * Math.exp(-(perp * perp) / TWO_SIGMA_SQ);
+      if (w < 1e-5) continue;
+
+      const tClamped = Math.max(0, Math.min(segLen, along));
+      const phase = kEff * (startPath + tClamped);
+
+      E_re[i] += w * Math.cos(phase);
+      E_im[i] += w * Math.sin(phase);
+    }
+  }
+
+  const intensities = new Float32Array(resolution);
+  for (let i = 0; i < resolution; i++) {
+    intensities[i] = E_re[i] * E_re[i] + E_im[i] * E_im[i];
+  }
+
+  return { intensities, wavelength: segments[0]?.wavelength ?? 532 };
+}
+
